@@ -40,8 +40,6 @@ def relay_data(client_socket, url, port):
 				except:
 					exit()
 
-
-
 def start_server(listen_address, listen_port):
 	server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 	server_socket.bind((listen_address, listen_port))

@@ -3,19 +3,28 @@ import threading
 import select
 
 VERSION = b'\x05\x00\x00'
-CMD_CONNECT = 1
-ATYP_IPV4 = 1
-ATYP_DOMAINNAME = 3
+CMD_CONNECT = 0x01
+ATYP_IPV4 = 0x01
+ATYP_DOMAINNAME = 0x03
 
-verbose = False
-verbose_ip = []
-
-class SOCKS5:
+class Socks5:
 	def __init__(self, listen_address, listen_port):
 		self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.server.bind((listen_address, listen_port))
 		self.server.listen(5)
+
+		self.remote_list = []
+
+		self.on_connect = None
+		self.on_disconnect = None
+		self.on_sending = None
+		self.on_receiving = None
+		
 		print("Listening on", listen_address, listen_port)
+
+	def run_handler(self, handler, *args):
+		if (handler != None):
+			return handler(*args)
 
 	def get_host_from_type(self, client_socket):
 		host_type = client_socket.recv(1)[0]
@@ -41,16 +50,17 @@ class SOCKS5:
 					if not data:
 						return
 					if sock is remote_socket:
-						if (verbose or host in verbose_ip):
-							print("[*] REQUESTED RECEIVED", data)
-						client_socket.send(data)
+						new_data = self.run_handler(self.on_receiving, remote_socket, data)
+						if new_data is None:
+							new_data = data
+						client_socket.send(new_data)
 					else:
-						if (verbose or host in verbose_ip):
-							print("[*] REQUESTED SENDING", data)
-						remote_socket.send(data)
+						new_data = self.run_handler(self.on_sending, remote_socket, data)
+						if new_data is None:
+							new_data = data
+						remote_socket.send(new_data)
 			except socket.error as err:
 				return
-
 
 	def handle_client(self, client_socket):
 		initial_request = client_socket.recv(8)
@@ -69,49 +79,24 @@ class SOCKS5:
 			if command == CMD_CONNECT:	
 				if (host_type == ATYP_IPV4):
 					realip = socket.inet_ntoa(host)
-					if (verbose):
-						print("[*] REQUESTED", command, realip, port)
 					remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 					remote_socket.connect((realip, port))
-					client_socket.send(b'\x05\x00\x00\x01' + host + port.to_bytes(2, "big"))
+					client_socket.send(VERSION + b'\x01' + host + port.to_bytes(2, "big"))
 
 				elif (host_type == ATYP_DOMAINNAME):
 					realip = host.decode()
-					if (verbose):
-						print("[*] REQUESTED", command, realip, port)
-
 					remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 					remote_socket.connect((realip, port))
-					client_socket.send(b'\x05\x00\x00\x03' + len(host).to_bytes(1, "big") + host + port.to_bytes(2, "big"))
-				else:
-					print("non géré!")
-					client_socket.close()
+					client_socket.send(VERSION + b'\x03' + len(host).to_bytes(1, "big") + host + port.to_bytes(2, "big"))
+				self.remote_list.append(remote_socket)
 				self.handle_tcp(client_socket, remote_socket, realip)
-			else:
-				print("non géré")
-				client_socket.close()
-		else:
-			print("autre methode authentification")
-			client_socket.close()
+		self.remote_list.remove(remote_socket)
+		self.run_handler(self.on_disconnect, client_socket)
+		client_socket.close()
 
 	def run(self):
 		while True:
 			client_socket, addr = self.server.accept()
-			if (verbose):
-				print(f"[*] Connected to {addr[0]}:{addr[1]}")
+			self.run_handler(self.on_connect, client_socket, addr)
+
 			threading.Thread(target=self.handle_client, args=(client_socket,)).start()
-
-if __name__ == "__main__":
-	socks = SOCKS5("0.0.0.0", 8888)
-	threading.Thread(target=socks.run).start()
-
-	while True:
-		cmd = input("> ")
-		if (cmd == "v"):
-			verbose = not verbose
-		elif (cmd.startswith("v ")):
-			ip = cmd.split(" ")[1]
-			if (ip in verbose_ip):
-				verbose_ip.remove(ip)
-			else:
-				verbose_ip.append(ip)
